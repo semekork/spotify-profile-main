@@ -57,10 +57,14 @@ export const getAccessToken = () => {
 export const token = getAccessToken();
 
 export const logout = () => {
-  window.localStorage.removeItem('spotify_token_timestamp');
-  window.localStorage.removeItem('spotify_access_token');
-  window.localStorage.removeItem('spotify_refresh_token');
-  window.location.reload();
+  // Clear all Spotify-related items from localStorage
+  const spotifyKeys = Object.keys(window.localStorage).filter(key => key.startsWith('spotify_'));
+  spotifyKeys.forEach(key => {
+    window.localStorage.removeItem(key);
+  });
+
+  // Redirect to root instead of reloading to ensure clean state
+  window.location.href = '/';
 };
 
 // API CALLS ***************************************************************************************
