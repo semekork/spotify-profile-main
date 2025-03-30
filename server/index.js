@@ -3,6 +3,16 @@
 // https://github.com/spotify/web-api-auth-examples
 
 require('dotenv').config();
+const crypto = require('crypto');
+const express = require('express');
+const request = require('request');
+const cors = require('cors');
+const querystring = require('querystring');
+const cookieParser = require('cookie-parser');
+const path = require('path');
+const cluster = require('cluster');
+const numCPUs = require('os').cpus().length;
+const history = require('connect-history-api-fallback');
 
 const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
@@ -15,28 +25,16 @@ if (process.env.NODE_ENV !== 'production') {
   FRONTEND_URI = 'http://localhost:3000';
 }
 
-const express = require('express');
-const request = require('request');
-const cors = require('cors');
-const querystring = require('querystring');
-const cookieParser = require('cookie-parser');
-const path = require('path');
-const cluster = require('cluster');
-const numCPUs = require('os').cpus().length;
-const history = require('connect-history-api-fallback');
-
 /**
- * Generates a random string containing numbers and letters
+ * Generates a cryptographically secure random string
  * @param  {number} length The length of the string
  * @return {string} The generated string
  */
 const generateRandomString = length => {
-  let text = '';
-  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  for (let i = 0; i < length; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
+  return crypto
+    .randomBytes(Math.ceil(length / 2))
+    .toString('hex')
+    .slice(0, length);
 };
 
 const stateKey = 'spotify_auth_state';
@@ -58,9 +56,7 @@ if (cluster.isMaster) {
 } else {
   const app = express();
 
-  // Priority serve any static files.
-  app.use(express.static(path.resolve(__dirname, '../client/build')));
-
+  // Configure middleware once
   app
     .use(express.static(path.resolve(__dirname, '../client/build')))
     .use(cors())
@@ -74,8 +70,7 @@ if (cluster.isMaster) {
           { from: /\/refresh_token/, to: '/refresh_token' },
         ],
       }),
-    )
-    .use(express.static(path.resolve(__dirname, '../client/build')));
+    );
 
   app.get('/', function (req, res) {
     res.render(path.resolve(__dirname, '../client/build/index.html'));
@@ -85,7 +80,6 @@ if (cluster.isMaster) {
     const state = generateRandomString(16);
     res.cookie(stateKey, state);
 
-    // your application requests authorization
     const scope =
       'user-read-private user-read-email user-read-recently-played user-top-read user-follow-read user-follow-modify playlist-read-private playlist-read-collaborative playlist-modify-public';
 
@@ -101,9 +95,6 @@ if (cluster.isMaster) {
   });
 
   app.get('/callback', function (req, res) {
-    // your application requests refresh and access tokens
-    // after checking the state parameter
-
     const code = req.query.code || null;
     const state = req.query.state || null;
     const storedState = req.cookies ? req.cookies[stateKey] : null;
@@ -120,9 +111,7 @@ if (cluster.isMaster) {
           grant_type: 'authorization_code',
         },
         headers: {
-          Authorization: `Basic ${new Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString(
-            'base64',
-          )}`,
+          Authorization: `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`,
         },
         json: true,
       };
@@ -132,7 +121,6 @@ if (cluster.isMaster) {
           const access_token = body.access_token;
           const refresh_token = body.refresh_token;
 
-          // we can also pass the token to the browser to make requests from there
           res.redirect(
             `${FRONTEND_URI}/#${querystring.stringify({
               access_token,
@@ -147,14 +135,11 @@ if (cluster.isMaster) {
   });
 
   app.get('/refresh_token', function (req, res) {
-    // requesting access token from refresh token
     const refresh_token = req.query.refresh_token;
     const authOptions = {
       url: 'https://accounts.spotify.com/api/token',
       headers: {
-        Authorization: `Basic ${new Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString(
-          'base64',
-        )}`,
+        Authorization: `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`,
       },
       form: {
         grant_type: 'refresh_token',
@@ -164,16 +149,16 @@ if (cluster.isMaster) {
     };
 
     request.post(authOptions, function (error, response, body) {
-      if (!error && response.statusCode === 200) {
-        const access_token = body.access_token;
-        res.send({ access_token });
+      if (error || response.statusCode !== 200) {
+        return res.status(400).json({ error: 'invalid_token' });
       }
+      res.send({ access_token: body.access_token });
     });
   });
 
   // All remaining requests return the React app, so it can handle routing.
   app.get('*', function (request, response) {
-    response.sendFile(path.resolve(__dirname, '../client/public', 'index.html'));
+    response.sendFile(path.resolve(__dirname, '../client/build/index.html'));
   });
 
   app.listen(PORT, function () {
